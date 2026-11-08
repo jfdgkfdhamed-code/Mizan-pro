@@ -1,0 +1,19 @@
+name: mizan_pro
+description: الميزان برو - نقطة بيع ومخزون وكريدي ومحاسبة لمحلات المواد الغذائية
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  sqflite: ^2.3.3
+  path: ^1.9.0
+  url_launcher: ^6.3.0
+
+flutter:
+  uses-material-design: true
