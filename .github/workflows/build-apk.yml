@@ -39,4 +39,3 @@ jobs:
         with:
           name: mizan-pro-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-          
