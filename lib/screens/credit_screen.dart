@@ -31,6 +31,8 @@ class _CreditScreenState extends State<CreditScreen> {
             TextField(
                 controller: phone,
                 keyboardType: TextInputType.phone,
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.right,
                 decoration: const InputDecoration(labelText: 'الهاتف (لتذكير واتساب)')),
             const SizedBox(height: 10),
             TextField(controller: notes, decoration: const InputDecoration(labelText: 'ملاحظات')),
@@ -38,6 +40,8 @@ class _CreditScreenState extends State<CreditScreen> {
             TextField(
                 controller: debt,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.right,
                 decoration: const InputDecoration(labelText: 'دين سابق (اختياري)')),
           ]),
         ),
@@ -161,6 +165,8 @@ class CustomerPage extends StatelessWidget {
             controller: amount,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textDirection: TextDirection.ltr,
+            textAlign: TextAlign.right,
             decoration: const InputDecoration(labelText: 'المبلغ (د.ج)'),
           ),
           const SizedBox(height: 10),
@@ -182,7 +188,8 @@ class CustomerPage extends StatelessWidget {
   }
 
   Future<void> _whatsapp(BuildContext context, Customer c) async {
-    final link = debtReminderLink(c.phone, c.name, c.totalDebt);
+    final link = debtReminderLink(c.phone, c.name, c.totalDebt,
+        storeName: store.storeName);
     if (link == null) {
       snack(context, 'أضف رقم هاتف جزائري صحيح للزبون', error: true);
       return;

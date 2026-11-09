@@ -91,10 +91,10 @@ class _AccountingScreenState extends State<AccountingScreen> {
                     Colors.blueGrey.shade800, sub: '${st.invoices} فاتورة'),
                 kpiCard('صافي الربح (بعد المصاريف)', formatDA(st.netProfit),
                     Icons.trending_up, kGreen,
-                    sub: 'ربح السلع ${formatDA(st.grossProfit)} − مصاريف ${formatDA(st.expenses)}'),
+                    sub: 'ربح السلع ${formatDA(st.grossProfit)} − مصاريف التشغيل ${formatDA(st.operatingExpenses)}'),
                 kpiCard('السيولة في الصندوق', formatDA(st.cashInDrawer), Icons.payments,
                     Colors.teal.shade700,
-                    sub: 'كاش ${formatDA(st.cashFromSales)} + ديون ${formatDA(st.debtRepayments)} − مصاريف'),
+                    sub: 'كاش ${formatDA(st.cashFromSales)} + ديون ${formatDA(st.debtRepayments)} − مصاريف ${formatDA(st.expenses)}'),
                 kpiCard('كريدي اليوم', formatDA(st.newCredit), Icons.menu_book,
                     Colors.amber.shade900,
                     sub: 'إجمالي الدفتر ${formatDA(st.totalDebt)}'),
@@ -186,6 +186,15 @@ class _AccountingScreenState extends State<AccountingScreen> {
             Text('اليوم: ${formatDA(st.expenses)} د.ج',
                 style: TextStyle(color: Colors.red.shade800, fontWeight: FontWeight.bold)),
           ]),
+          if (st.purchases > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'منها مشتريات من المورّدين: ${formatDA(st.purchases)} د.ج — تُخصم من الصندوق '
+                'ولا تُخصم من صافي الربح، لأن تكلفة البضاعة محسوبة أصلاً في ربح كل فاتورة.',
+                style: const TextStyle(fontSize: 11.5, color: Colors.black54, height: 1.5),
+              ),
+            ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
             value: _expCategory,
@@ -203,6 +212,8 @@ class _AccountingScreenState extends State<AccountingScreen> {
               child: TextField(
                 controller: _expAmount,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.right,
                 decoration: const InputDecoration(labelText: 'المبلغ (د.ج)'),
               ),
             ),

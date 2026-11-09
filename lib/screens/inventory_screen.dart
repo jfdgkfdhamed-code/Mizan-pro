@@ -23,10 +23,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _restock(Product p) async {
-    final v = await askNumber(context,
-        title: 'كمية الإضافة للمخزون — ${p.name}', hint: 'مثال: 24');
-    if (v == null || v == 0 || !mounted) return;
-    await guard(context, () => widget.store.restock(p.id, v));
+    await showDialog<void>(
+      context: context,
+      builder: (_) => RestockDialog(store: widget.store, product: p),
+    );
   }
 
   @override
@@ -78,7 +78,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
             ),
             Expanded(
               child: items.isEmpty
-                  ? const Center(child: Text('لا توجد سلع'))
+                  ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text(
+                          'لا توجد سلع بعد.\nاضغط «سلعة جديدة» لإضافة أول سلعة.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(height: 1.6),
+                        ),
+                      ),
+                    )
                   : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(10, 6, 10, 90),
                       itemCount: items.length,
@@ -145,6 +154,7 @@ class _ProductDialogState extends State<ProductDialog> {
   late String _category = widget.product?.category ?? kCategories.first;
   late String _unit = widget.product?.unit ?? kUnits.first;
   late bool _popular = widget.product?.isPopular ?? false;
+  bool _recordPurchase = true; // only used for a NEW product
 
   @override
   void dispose() {
@@ -157,6 +167,8 @@ class _ProductDialogState extends State<ProductDialog> {
   Widget _num(TextEditingController c, String label) => TextField(
         controller: c,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textDirection: TextDirection.ltr,
+        textAlign: TextAlign.right,
         decoration: InputDecoration(labelText: label),
       );
 
@@ -176,7 +188,9 @@ class _ProductDialogState extends State<ProductDialog> {
       minAlert: (parseNum(_min.text) ?? 10).clamp(0, double.infinity).toDouble(),
     );
     final ok = await guard(
-        context, () => widget.store.saveProduct(p, id: widget.product?.id));
+        context,
+        () => widget.store.saveProduct(p,
+            id: widget.product?.id, recordPurchase: _recordPurchase));
     if (ok && mounted) Navigator.pop(context);
   }
 
@@ -233,6 +247,15 @@ class _ProductDialogState extends State<ProductDialog> {
           _num(_stock, 'الكمية في المخزون'),
           gap,
           _num(_min, 'تنبيه عند نزول المخزون إلى'),
+          if (widget.product == null)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('خصم ثمن الشراء تلقائياً'),
+              subtitle: const Text(
+                  'يُسجَّل مصروف شراء = الكمية × سعر الشراء، ويُخصم من الصندوق'),
+              value: _recordPurchase,
+              onChanged: (v) => setState(() => _recordPurchase = v),
+            ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('سلعة شائعة (تظهر أولاً)'),
@@ -248,6 +271,101 @@ class _ProductDialogState extends State<ProductDialog> {
               child: const Text('حذف', style: TextStyle(color: Colors.red))),
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
         FilledButton(onPressed: _save, child: const Text('حفظ')),
+      ],
+    );
+  }
+}
+
+
+/// Adds stock and (optionally) records the supplier purchase as an expense
+/// automatically: quantity x unit cost.
+class RestockDialog extends StatefulWidget {
+  final Store store;
+  final Product product;
+  const RestockDialog({super.key, required this.store, required this.product});
+
+  @override
+  State<RestockDialog> createState() => _RestockDialogState();
+}
+
+class _RestockDialogState extends State<RestockDialog> {
+  final _qty = TextEditingController();
+  late final _cost =
+      TextEditingController(text: fmtQty(widget.product.costPrice));
+  bool _record = true;
+
+  @override
+  void dispose() {
+    _qty.dispose();
+    _cost.dispose();
+    super.dispose();
+  }
+
+  double get _q => parseNum(_qty.text) ?? 0;
+  double get _c => parseNum(_cost.text) ?? widget.product.costPrice;
+
+  Future<void> _save() async {
+    if (_q == 0) {
+      snack(context, 'أدخل الكمية', error: true);
+      return;
+    }
+    final ok = await guard(
+        context,
+        () => widget.store
+            .restock(widget.product.id, _q, unitCost: _c, recordExpense: _record));
+    if (ok && mounted) {
+      Navigator.pop(context);
+      if (_record && _q > 0 && _c > 0) {
+        snack(context,
+            'تمت الإضافة وخُصم ${formatDA(_q * _c)} د.ج من الصندوق كمشتريات');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.product;
+    final total = _q > 0 ? _q * _c : 0.0;
+    return AlertDialog(
+      title: Text('إضافة للمخزون — ${p.name}'),
+      content: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: _qty,
+            autofocus: true,
+            onChanged: (_) => setState(() {}),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+            textDirection: TextDirection.ltr,
+            textAlign: TextAlign.right,
+            decoration: InputDecoration(labelText: 'الكمية المضافة (${p.unit})'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _cost,
+            onChanged: (_) => setState(() {}),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textDirection: TextDirection.ltr,
+            textAlign: TextAlign.right,
+            decoration: InputDecoration(
+                labelText: 'سعر شراء ال${p.unit} من المورّد (د.ج)'),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('خصم ثمن الشراء تلقائياً'),
+            subtitle: Text(_record && total > 0
+                ? 'سيُخصم ${formatDA(total)} د.ج من الصندوق'
+                : 'تسجيل مصروف شراء من المورّد'),
+            value: _record,
+            onChanged: (v) => setState(() => _record = v),
+          ),
+          if (_c != p.costPrice)
+            Text('سيتحدّث سعر الشراء المسجّل من ${formatDA(p.costPrice)} إلى ${formatDA(_c)} د.ج',
+                style: TextStyle(fontSize: 12, color: Colors.orange.shade900)),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+        FilledButton(onPressed: _save, child: const Text('إضافة')),
       ],
     );
   }

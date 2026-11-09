@@ -339,6 +339,8 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
                     TextField(
                         controller: _phone,
                         keyboardType: TextInputType.phone,
+                        textDirection: TextDirection.ltr,
+                        textAlign: TextAlign.right,
                         decoration: const InputDecoration(labelText: 'الهاتف (اختياري)')),
                   ],
                   Align(
@@ -441,7 +443,8 @@ String receiptText(Sale s) {
     ..writeln('الزبون: ${s.customerName ?? '-'}')
     ..writeln('------------------');
   for (final i in s.items) {
-    b.writeln('${i.productName}  ${fmtQty(i.quantity)} × ${formatDA(i.unitPrice)} = ${formatDA(i.subtotal)}');
+    b.writeln(i.productName);
+    b.writeln(ltr('${fmtQty(i.quantity)} × ${formatDA(i.unitPrice)} = ${formatDA(i.subtotal)}'));
   }
   b
     ..writeln('------------------')
