@@ -5,6 +5,7 @@ import 'screens/accounting_screen.dart';
 import 'screens/credit_screen.dart';
 import 'screens/inventory_screen.dart';
 import 'screens/pos_screen.dart';
+import 'screens/settings_screen.dart';
 import 'store.dart';
 import 'ui.dart';
 
@@ -54,6 +55,45 @@ class _HomeShellState extends State<HomeShell> {
   final Cart _cart = Cart();
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeWelcome());
+  }
+
+  /// First launch: ask for the shop name. The app starts empty for everyone.
+  Future<void> _maybeWelcome() async {
+    final store = widget.store;
+    if (store.setupDone || !mounted) return;
+    final name = TextEditingController();
+    final sample = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (c) => AlertDialog(
+        title: const Text('مرحباً بك في الميزان برو'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text(
+              'بياناتك تبقى في هاتفك فقط. أدخل اسم محلك للبدء (يمكنك تغييره لاحقاً):'),
+          const SizedBox(height: 12),
+          TextField(
+              controller: name,
+              decoration: const InputDecoration(labelText: 'اسم المحل')),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('تجربة بسلع تجريبية')),
+          FilledButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('ابدأ بمحل فارغ')),
+        ],
+      ),
+    );
+    await store.setSetting('store_name', name.text.trim());
+    await store.setSetting('setup_done', '1');
+    if (sample == true) await store.loadSampleProducts();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final store = widget.store;
     return ListenableBuilder(
@@ -62,8 +102,9 @@ class _HomeShellState extends State<HomeShell> {
         final st = store.stats;
         return Scaffold(
           appBar: AppBar(
-            title: const Text('الميزان برو',
-                style: TextStyle(fontWeight: FontWeight.w900)),
+            title: Text(
+                store.storeName.isEmpty ? 'الميزان برو' : store.storeName,
+                style: const TextStyle(fontWeight: FontWeight.w900)),
             backgroundColor: kGreen,
             foregroundColor: Colors.white,
             actions: [
@@ -81,6 +122,15 @@ class _HomeShellState extends State<HomeShell> {
                               fontSize: 11, fontWeight: FontWeight.bold)),
                     ],
                   ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'الإعدادات',
+                icon: const Icon(Icons.settings),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => SettingsScreen(store: store)),
                 ),
               ),
             ],

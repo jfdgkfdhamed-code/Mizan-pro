@@ -14,6 +14,7 @@ class AppError implements Exception {
 }
 
 double _r2(double n) => (n * 100).round() / 100;
+String _q(double q) => q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toString();
 String _now() => DateTime.now().toUtc().toIso8601String();
 
 class Store extends ChangeNotifier {
@@ -25,24 +26,37 @@ class Store extends ChangeNotifier {
   List<CreditTx> creditTxs = [];
   List<Expense> expenses = [];
   Stats stats = const Stats();
+  Map<String, String> settings = {};
+
+  String get storeName => settings['store_name'] ?? '';
+  bool get setupDone => settings['setup_done'] == '1';
 
   Future<void> init() async {
     final path = p.join(await getDatabasesPath(), 'mizan_pro.db');
     db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onConfigure: (d) async => d.execute('PRAGMA foreign_keys = ON'),
+      // Every installation starts EMPTY: nobody receives anyone else's data.
       onCreate: (d, v) async {
         for (final sql in _schema) {
           await d.execute(sql);
         }
-        await _seed(d);
+      },
+      onUpgrade: (d, oldV, newV) async {
+        if (oldV < 2) {
+          await d.execute(_settingsSql);
+        }
       },
     );
     await refresh();
   }
 
+  static const _settingsSql =
+      'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)';
+
   static const _schema = [
+    _settingsSql,
     '''CREATE TABLE products (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL, brand TEXT NOT NULL DEFAULT '',
@@ -123,6 +137,9 @@ class Store extends ChangeNotifier {
 
   // ---------------------------------------------------------------- loading
   Future<void> refresh() async {
+    settings = {
+      for (final r in await db.query('settings')) r['key'] as String: r['value'] as String
+    };
     products = (await db.query('products', orderBy: 'is_popular DESC, id'))
         .map(Product.fromMap)
         .toList();
@@ -178,6 +195,9 @@ class Store extends ChangeNotifier {
           .fold(0.0, (a, t) => a + t.amount),
       expenses: expenses
           .where((e) => today(e.createdAt))
+          .fold(0.0, (a, e) => a + e.amount),
+      purchases: expenses
+          .where((e) => today(e.createdAt) && e.category == kPurchaseCategory)
           .fold(0.0, (a, e) => a + e.amount),
       totalDebt: customers.fold(0.0, (a, c) => a + c.totalDebt),
       lowStock: products.where((x) => x.isLow).length,
@@ -464,21 +484,58 @@ class Store extends ChangeNotifier {
   }
 
   // --------------------------------------------------------------- products
-  Future<void> saveProduct(Product x, {int? id}) async {
+  /// [recordPurchase]: for a NEW product with opening stock, automatically
+  /// records an expense = quantity x cost price (money paid to the supplier).
+  Future<void> saveProduct(Product x, {int? id, bool recordPurchase = false}) async {
     if (x.name.trim().isEmpty) throw AppError('اسم السلعة مطلوب');
-    if (id == null) {
-      await db.insert('products', x.toMap());
-    } else {
-      await db.update('products', x.toMap(), where: 'id = ?', whereArgs: [id]);
-    }
+    await db.transaction((txn) async {
+      if (id == null) {
+        await txn.insert('products', x.toMap());
+        if (recordPurchase && x.stock > 0 && x.costPrice > 0) {
+          await txn.insert('expenses', {
+            'category': kPurchaseCategory,
+            'amount': _r2(x.stock * x.costPrice),
+            'note': 'شراء ${_q(x.stock)} ${x.unit} — ${x.name.trim()}',
+            'created_at': _now(),
+          });
+        }
+      } else {
+        await txn.update('products', x.toMap(), where: 'id = ?', whereArgs: [id]);
+      }
+    });
     await refresh();
   }
 
-  Future<void> restock(int id, double delta) async {
-    await db.rawUpdate(
-        'UPDATE products SET stock_quantity = '
-        'MAX(0, ROUND(stock_quantity + ?, 3)) WHERE id = ?',
-        [delta, id]);
+  /// Adds (or removes, if negative) stock. With [recordExpense] the purchase
+  /// cost (qty x unit cost) is recorded automatically as an expense, and the
+  /// product's cost price is updated if the supplier's price changed.
+  Future<void> restock(int id, double delta,
+      {double? unitCost, bool recordExpense = false}) async {
+    await db.transaction((txn) async {
+      final rows = await txn.query('products', where: 'id = ?', whereArgs: [id]);
+      if (rows.isEmpty) throw AppError('السلعة غير موجودة');
+      final name = rows.first['name'] as String;
+      final unit = rows.first['unit'] as String;
+      final oldCost = (rows.first['cost_price'] as num).toDouble();
+      final cost = (unitCost != null && unitCost >= 0) ? unitCost : oldCost;
+
+      await txn.rawUpdate(
+          'UPDATE products SET stock_quantity = '
+          'MAX(0, ROUND(stock_quantity + ?, 3)) WHERE id = ?',
+          [delta, id]);
+      if (cost != oldCost) {
+        await txn.update('products', {'cost_price': cost},
+            where: 'id = ?', whereArgs: [id]);
+      }
+      if (recordExpense && delta > 0 && cost > 0) {
+        await txn.insert('expenses', {
+          'category': kPurchaseCategory,
+          'amount': _r2(delta * cost),
+          'note': 'شراء ${_q(delta)} $unit — $name',
+          'created_at': _now(),
+        });
+      }
+    });
     await refresh();
   }
 
@@ -501,6 +558,36 @@ class Store extends ChangeNotifier {
 
   Future<void> deleteExpense(int id) async {
     await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
+    await refresh();
+  }
+
+  // --------------------------------------------------------------- settings
+  Future<void> setSetting(String key, String value) async {
+    await db.insert('settings', {'key': key, 'value': value},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await refresh();
+  }
+
+  Future<void> loadSampleProducts() async {
+    await _seed(db);
+    await refresh();
+  }
+
+  /// Wipes ALL shop data on this phone (products, sales, customers, expenses).
+  Future<void> resetAllData() async {
+    await db.transaction((txn) async {
+      for (final t in [
+        'credit_transactions',
+        'sale_items',
+        'sales',
+        'expenses',
+        'customers',
+        'products',
+      ]) {
+        await txn.delete(t);
+      }
+      await txn.delete('sqlite_sequence');
+    });
     await refresh();
   }
 }

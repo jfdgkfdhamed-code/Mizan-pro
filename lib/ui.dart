@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'models.dart' show kPurchaseCategory;
 import 'store.dart';
 
 const kCategories = [
@@ -15,7 +16,7 @@ const kCategories = [
 ];
 const kUnits = ['حبة', 'علبة', 'قارورة', 'كيس', 'كغ'];
 const kExpenseCategories = [
-  'شراء بضاعة من المورّد',
+  kPurchaseCategory,
   'كراء المحل',
   'كهرباء وماء وغاز',
   'أجور العمال',
@@ -26,6 +27,12 @@ const kExpenseCategories = [
 
 const kGreen = Color(0xFF047857);
 
+// In a right-to-left screen, numbers like "85 000" or "10/11/2026" get their groups
+// shuffled ("000 85"). Wrapping them in an LTR *isolate* keeps them in order.
+const _lri = '\u2066';
+const _pdi = '\u2069';
+String ltr(String s) => '$_lri$s$_pdi';
+
 /// 12500 -> "12 500"
 String formatDA(double v) {
   final r = (v * 100).round() / 100;
@@ -35,10 +42,10 @@ String formatDA(double v) {
   final buf = StringBuffer();
   final ip = parts[0];
   for (var i = 0; i < ip.length; i++) {
-    if (i > 0 && (ip.length - i) % 3 == 0) buf.write(' ');
+    if (i > 0 && (ip.length - i) % 3 == 0) buf.write('\u00A0');
     buf.write(ip[i]);
   }
-  return '${neg ? '-' : ''}$buf${parts.length > 1 ? '.${parts[1]}' : ''}';
+  return ltr('${neg ? '-' : ''}$buf${parts.length > 1 ? '.${parts[1]}' : ''}');
 }
 
 String fmtQty(double q) {
@@ -51,7 +58,7 @@ String fmtQty(double q) {
 
 String fmtDateTime(DateTime d) {
   String t(int n) => n.toString().padLeft(2, '0');
-  return '${t(d.day)}/${t(d.month)}/${d.year} ${t(d.hour)}:${t(d.minute)}';
+  return ltr('${t(d.day)}/${t(d.month)}/${d.year} ${t(d.hour)}:${t(d.minute)}');
 }
 
 String normalizeArabic(String s) => s
@@ -62,7 +69,8 @@ String normalizeArabic(String s) => s
     .trim();
 
 /// WhatsApp link with a ready debt-reminder message. 0550123456 -> 213550123456
-String? debtReminderLink(String phone, String name, double debt) {
+String? debtReminderLink(String phone, String name, double debt,
+    {String storeName = ''}) {
   var d = phone.replaceAll(RegExp(r'[^\d+]'), '');
   if (d.startsWith('+')) {
     d = d.substring(1);
@@ -73,7 +81,7 @@ String? debtReminderLink(String phone, String name, double debt) {
   }
   if (!RegExp(r'^213\d{8,9}$').hasMatch(d)) return null;
   final msg = 'السلام عليكم $name،\n'
-      'نذكّركم بلطف أن المبلغ المتبقي عليكم في المحل هو ${formatDA(debt)} د.ج.\n'
+      'نذكّركم بلطف أن المبلغ المتبقي عليكم في ${storeName.trim().isEmpty ? 'المحل' : storeName.trim()} هو ${formatDA(debt)} د.ج.\n'
       'نرجو التسوية في أقرب وقت ممكن. بارك الله فيكم وشكراً.';
   return 'https://wa.me/$d?text=${Uri.encodeComponent(msg)}';
 }
@@ -126,6 +134,8 @@ Future<double?> askNumber(BuildContext context,
         controller: ctrl,
         autofocus: true,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textDirection: TextDirection.ltr,
+        textAlign: TextAlign.right,
         decoration: InputDecoration(hintText: hint),
       ),
       actions: [
@@ -142,7 +152,10 @@ Future<double?> askNumber(BuildContext context,
 /// Accepts "1,5" and Arabic-Indic digits too.
 double? parseNum(String s) {
   const ar = '٠١٢٣٤٥٦٧٨٩';
-  var t = s.trim().replaceAll(',', '.').replaceAll('،', '.');
+  var t = s
+      .replaceAll(RegExp('[\u2066\u2069\u200E\u200F\u00A0\\s]'), '')
+      .replaceAll(',', '.')
+      .replaceAll('،', '.');
   for (var i = 0; i < 10; i++) {
     t = t.replaceAll(ar[i], '$i');
   }
@@ -150,7 +163,8 @@ double? parseNum(String s) {
 }
 
 Future<void> copyText(BuildContext context, String text) async {
-  await Clipboard.setData(ClipboardData(text: text));
+  await Clipboard.setData(ClipboardData(
+      text: text.replaceAll(RegExp('[\u2066\u2069]'), '').replaceAll('\u00A0', ' ')));
   if (context.mounted) snack(context, 'تم النسخ');
 }
 

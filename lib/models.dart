@@ -1,3 +1,6 @@
+/// Category used for supplier purchases (recorded automatically when stock is added).
+const kPurchaseCategory = 'شراء بضاعة من المورّد';
+
 double _d(Object? v) => (v as num?)?.toDouble() ?? 0;
 int _i(Object? v) => (v as num?)?.toInt() ?? 0;
 
@@ -196,14 +199,15 @@ class Expense {
 }
 
 class Stats {
-  final double revenue, grossProfit, expenses, cashFromSales, debtRepayments,
-      newCredit, totalDebt;
+  final double revenue, grossProfit, expenses, purchases, cashFromSales,
+      debtRepayments, newCredit, totalDebt;
   final int invoices, lowStock, outOfStock;
 
   const Stats({
     this.revenue = 0,
     this.grossProfit = 0,
     this.expenses = 0,
+    this.purchases = 0,
     this.cashFromSales = 0,
     this.debtRepayments = 0,
     this.newCredit = 0,
@@ -213,9 +217,15 @@ class Stats {
     this.outOfStock = 0,
   });
 
-  /// Real net profit = profit on goods sold - expenses.
-  double get netProfit => grossProfit - expenses;
+  /// Running costs (rent, electricity, wages...) = all expenses except purchases.
+  double get operatingExpenses => expenses - purchases;
 
-  /// Cash in the drawer = cash sales + debts collected - expenses paid.
+  /// Real net profit = profit on goods sold - running costs.
+  /// Purchases are NOT subtracted here: the cost of the goods is already inside
+  /// each invoice's profit, so subtracting it again would count it twice.
+  double get netProfit => grossProfit - operatingExpenses;
+
+  /// Cash in the drawer = cash sales + debts collected - ALL expenses paid
+  /// (purchases included, because that money really left the drawer).
   double get cashInDrawer => cashFromSales + debtRepayments - expenses;
 }
