@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - uses: subosito/flutter-action@v2
         with:
@@ -52,14 +52,49 @@ jobs:
                   c = re.sub(r"minSdk\s*=\s*flutter\.minSdkVersion", "minSdk = 24", c)
                   c = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 24", c)
                   g.write_text(c, encoding="utf-8")
+
+          # --- Android lint crashes on some plugins ("List.removeLast" bug). Lint is only a
+          # code checker and does not change the app, so switch off the "vital" lint tasks.
+          for name, snippet in (
+              ("build.gradle.kts",
+               '\nsubprojects {\n    tasks.configureEach {\n        if (name.startsWith("lintVital")) { enabled = false }\n    }\n}\n'),
+              ("build.gradle",
+               "\nsubprojects {\n    tasks.configureEach {\n        if (name.startsWith('lintVital')) { enabled = false }\n    }\n}\n"),
+          ):
+              g = pathlib.Path("android") / name
+              if g.exists():
+                  g.write_text(g.read_text(encoding="utf-8") + snippet, encoding="utf-8")
           PY
+          tail -8 android/build.gradle* || true
           grep -n "CAMERA\|android:label" android/app/src/main/AndroidManifest.xml
           grep -rn "minSdk" android/app/build.gradle* || true
 
       - run: flutter pub get
 
+      # Quick check: lists Dart code errors with file name and line number.
+      - name: Analyze Dart code
+        shell: bash
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | grep -v "info •" | tail -60 || true
+
       - name: Build release APK
-        run: flutter build apk --release
+        shell: bash
+        run: flutter build apk --release 2>&1 | tee build.log
+
+      # Runs only when the build failed: prints just the useful error lines.
+      - name: Show build errors
+        if: failure()
+        shell: bash
+        run: |
+          echo "=============== ERRORS ==============="
+          grep -n -B3 -A12 "What went wrong\|Error:\|error:\|FAILURE:\|Execution failed" build.log | head -120 || true
+          echo "=============== LAST 40 LINES ==============="
+          tail -40 build.log
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: build.log
 
       - uses: actions/upload-artifact@v4
         with:
