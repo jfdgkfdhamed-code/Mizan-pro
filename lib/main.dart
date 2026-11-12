@@ -138,7 +138,17 @@ class _HomeShellState extends State<HomeShell> {
           body: IndexedStack(
             index: _tab,
             children: [
-              PosScreen(store: store, cart: _cart),
+              PosScreen(
+                store: store,
+                cart: _cart,
+                isActive: _tab == 0,
+                // The POS refused to sell something out of stock: open the
+                // inventory tab and ask to restock that product.
+                onGoToInventory: (p) {
+                  setState(() => _tab = 1);
+                  store.restockRequest.value = p;
+                },
+              ),
               InventoryScreen(store: store),
               CreditScreen(store: store),
               AccountingScreen(store: store),

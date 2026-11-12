@@ -15,6 +15,14 @@ class Cart extends ChangeNotifier {
   double get total => lines.fold(0.0, (a, l) => a + l.subtotal);
   int get count => lines.length;
 
+  /// Quantity of a product already in the cart.
+  double qtyOf(int productId) {
+    for (final l in lines) {
+      if (l.product.id == productId) return l.qty;
+    }
+    return 0;
+  }
+
   void add(Product p, {double qty = 1}) {
     final i = lines.indexWhere((l) => l.product.id == p.id);
     if (i >= 0) {

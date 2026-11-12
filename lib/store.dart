@@ -28,6 +28,19 @@ class Store extends ChangeNotifier {
   Stats stats = const Stats();
   Map<String, String> settings = {};
 
+  /// Set by the POS when a product has no stock: the inventory screen reacts by
+  /// opening the restock dialog for it.
+  final ValueNotifier<Product?> restockRequest = ValueNotifier<Product?>(null);
+
+  Product? productByBarcode(String code) {
+    final c = code.trim();
+    if (c.isEmpty) return null;
+    for (final p in products) {
+      if (p.barcode == c) return p;
+    }
+    return null;
+  }
+
   String get storeName => settings['store_name'] ?? '';
   bool get setupDone => settings['setup_done'] == '1';
 
@@ -35,7 +48,7 @@ class Store extends ChangeNotifier {
     final path = p.join(await getDatabasesPath(), 'mizan_pro.db');
     db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onConfigure: (d) async => d.execute('PRAGMA foreign_keys = ON'),
       // Every installation starts EMPTY: nobody receives anyone else's data.
       onCreate: (d, v) async {
@@ -47,10 +60,18 @@ class Store extends ChangeNotifier {
         if (oldV < 2) {
           await d.execute(_settingsSql);
         }
+        if (oldV < 3) {
+          await d.execute("ALTER TABLE products ADD COLUMN barcode TEXT NOT NULL DEFAULT ''");
+          await d.execute(_barcodeIndexSql);
+        }
       },
     );
     await refresh();
   }
+
+  // A barcode may belong to one product only (empty barcodes are ignored).
+  static const _barcodeIndexSql =
+      "CREATE UNIQUE INDEX IF NOT EXISTS products_barcode_idx ON products(barcode) WHERE barcode <> ''";
 
   static const _settingsSql =
       'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)';
@@ -60,6 +81,7 @@ class Store extends ChangeNotifier {
     '''CREATE TABLE products (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL, brand TEXT NOT NULL DEFAULT '',
+      barcode TEXT NOT NULL DEFAULT '',
       category TEXT NOT NULL, unit TEXT NOT NULL DEFAULT 'حبة',
       is_weighted INTEGER NOT NULL DEFAULT 0,
       cost_price REAL NOT NULL, selling_price REAL NOT NULL,
@@ -97,6 +119,7 @@ class Store extends ChangeNotifier {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       category TEXT NOT NULL, amount REAL NOT NULL,
       note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)''',
+    _barcodeIndexSql,
     'CREATE INDEX sales_created_idx ON sales(created_at)',
     'CREATE INDEX credit_tx_customer_idx ON credit_transactions(customer_id)',
     'CREATE INDEX sale_items_sale_idx ON sale_items(sale_id)',
@@ -229,6 +252,15 @@ class Store extends ChangeNotifier {
             ? l.product.costPrice
             : (rows.first['cost_price'] as num).toDouble();
         final qty = math.max(0.05, l.qty);
+        // Never record a sale of goods that are not in stock.
+        if (rows.isNotEmpty) {
+          final have = (rows.first['stock_quantity'] as num).toDouble();
+          if (qty > have + 1e-9) {
+            throw AppError(have <= 0
+                ? 'السلعة "${l.product.name}" نفدت من المخزون (0). حدّث المخزون أولاً.'
+                : 'المتوفر من "${l.product.name}" هو ${_q(have)} ${l.product.unit} فقط، والمطلوب ${_q(qty)}. حدّث المخزون أولاً.');
+          }
+        }
         final price = math.max(0.0, l.price);
         final sub = _r2(qty * price);
         final ct = _r2(qty * c);
@@ -488,6 +520,15 @@ class Store extends ChangeNotifier {
   /// records an expense = quantity x cost price (money paid to the supplier).
   Future<void> saveProduct(Product x, {int? id, bool recordPurchase = false}) async {
     if (x.name.trim().isEmpty) throw AppError('اسم السلعة مطلوب');
+    if (x.barcode.isNotEmpty) {
+      final dup = await db.query('products',
+          columns: ['id', 'name'],
+          where: id == null ? 'barcode = ?' : 'barcode = ? AND id != ?',
+          whereArgs: id == null ? [x.barcode] : [x.barcode, id]);
+      if (dup.isNotEmpty) {
+        throw AppError('هذا الباركود مسجل لسلعة أخرى: ${dup.first['name']}');
+      }
+    }
     await db.transaction((txn) async {
       if (id == null) {
         await txn.insert('products', x.toMap());

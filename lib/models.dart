@@ -6,7 +6,7 @@ int _i(Object? v) => (v as num?)?.toInt() ?? 0;
 
 class Product {
   final int id;
-  final String name, brand, category, unit;
+  final String name, brand, category, unit, barcode;
   final bool isWeighted, isPopular;
   final double costPrice, sellingPrice, stock, minAlert;
 
@@ -14,6 +14,7 @@ class Product {
     this.id = 0,
     required this.name,
     this.brand = '',
+    this.barcode = '',
     required this.category,
     this.unit = 'حبة',
     this.isWeighted = false,
@@ -31,6 +32,7 @@ class Product {
         id: _i(m['id']),
         name: m['name'] as String,
         brand: m['brand'] as String? ?? '',
+        barcode: m['barcode'] as String? ?? '',
         category: m['category'] as String,
         unit: m['unit'] as String? ?? 'حبة',
         isWeighted: _i(m['is_weighted']) == 1,
@@ -44,6 +46,7 @@ class Product {
   Map<String, Object?> toMap() => {
         'name': name,
         'brand': brand,
+        'barcode': barcode,
         'category': category,
         'unit': unit,
         'is_weighted': isWeighted ? 1 : 0,
