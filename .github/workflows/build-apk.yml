@@ -25,10 +25,36 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android --org dz.mizanpro --project-name mizan_pro .
 
-      - name: Remove default test and set app name
+      - name: Configure Android (remove default test, app name, camera permission, minSdk)
         run: |
           rm -rf test
-          sed -i 's/android:label="[^"]*"/android:label="الميزان برو"/' android/app/src/main/AndroidManifest.xml
+          python3 - <<'PY'
+          import re, pathlib
+
+          # --- AndroidManifest: app name + camera permission (barcode scanning)
+          m = pathlib.Path("android/app/src/main/AndroidManifest.xml")
+          t = m.read_text(encoding="utf-8")
+          t = re.sub(r'android:label="[^"]*"', 'android:label="الميزان برو"', t, count=1)
+          if "android.permission.CAMERA" not in t:
+              extra = (
+                  '    <uses-permission android:name="android.permission.CAMERA"/>\n'
+                  '    <uses-feature android:name="android.hardware.camera" android:required="false"/>\n'
+                  '    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>\n'
+              )
+              t = t.replace("<application", extra + "    <application", 1)
+          m.write_text(t, encoding="utf-8")
+
+          # --- minSdk 24 (needed by the camera scanner plugin)
+          for name in ("build.gradle.kts", "build.gradle"):
+              g = pathlib.Path("android/app") / name
+              if g.exists():
+                  c = g.read_text(encoding="utf-8")
+                  c = re.sub(r"minSdk\s*=\s*flutter\.minSdkVersion", "minSdk = 24", c)
+                  c = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 24", c)
+                  g.write_text(c, encoding="utf-8")
+          PY
+          grep -n "CAMERA\|android:label" android/app/src/main/AndroidManifest.xml
+          grep -rn "minSdk" android/app/build.gradle* || true
 
       - run: flutter pub get
 
