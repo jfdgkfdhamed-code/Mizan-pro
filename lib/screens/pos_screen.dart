@@ -1,13 +1,55 @@
 import 'package:flutter/material.dart';
+import '../barcode.dart';
 import '../cart.dart';
 import '../models.dart';
 import '../store.dart';
 import '../ui.dart';
+import 'inventory_screen.dart' show ProductDialog;
+
+/// Shown when someone tries to sell more than what is in stock.
+/// Returns true if the user chose to go and fix the stock.
+Future<bool> showStockProblem(BuildContext context, Product p, double wanted) async {
+  final msg = p.stock <= 0
+      ? 'السلعة "${p.name}" نفدت من المخزون (الكمية 0).\nلا يمكن بيعها قبل تحديث المخزون.'
+      : 'المتوفر من "${p.name}" هو ${fmtQty(p.stock)} ${p.unit} فقط،\nوالمطلوب ${fmtQty(wanted)} ${p.unit}.\nحدّث المخزون أولاً.';
+  final r = await showDialog<bool>(
+    context: context,
+    builder: (c) => AlertDialog(
+      icon: const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 38),
+      title: const Text('المخزون غير كافٍ'),
+      content: Text(msg, textAlign: TextAlign.center, style: const TextStyle(height: 1.6)),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('رجوع')),
+        FilledButton.icon(
+          onPressed: () => Navigator.pop(c, true),
+          icon: const Icon(Icons.inventory_2_outlined),
+          label: const Text('الذهاب إلى المخزون'),
+        ),
+      ],
+    ),
+  );
+  return r ?? false;
+}
 
 class PosScreen extends StatefulWidget {
   final Store store;
   final Cart cart;
-  const PosScreen({super.key, required this.store, required this.cart});
+
+  /// True while the POS tab is the visible one (USB scanner input is only
+  /// listened to there).
+  final bool isActive;
+
+  /// Switches to the inventory tab and opens the restock dialog for the product.
+  final void Function(Product) onGoToInventory;
+
+  const PosScreen({
+    super.key,
+    required this.store,
+    required this.cart,
+    required this.isActive,
+    required this.onGoToInventory,
+  });
 
   @override
   State<PosScreen> createState() => _PosScreenState();
@@ -16,25 +58,138 @@ class PosScreen extends StatefulWidget {
 class _PosScreenState extends State<PosScreen> {
   String _category = 'الكل';
   String _query = '';
+  final TextEditingController _search = TextEditingController();
+  late final UsbScannerListener _usb;
+  Product? _goInventoryAfterScanner;
+
+  @override
+  void initState() {
+    super.initState();
+    _usb = UsbScannerListener(
+      isEnabled: () =>
+          mounted &&
+          widget.isActive &&
+          (ModalRoute.of(context)?.isCurrent ?? true),
+      onScan: _onUsbScan,
+    );
+    _usb.attach();
+  }
+
+  @override
+  void dispose() {
+    _usb.detach();
+    _search.dispose();
+    super.dispose();
+  }
 
   List<Product> get _filtered {
     final q = normalizeArabic(_query);
     return widget.store.products.where((p) {
       if (_category != 'الكل' && p.category != _category) return false;
       if (q.isEmpty) return true;
-      return normalizeArabic('${p.name} ${p.brand}').contains(q);
+      return normalizeArabic('${p.name} ${p.brand}').contains(q) ||
+          p.barcode.contains(_query.trim());
     }).toList();
   }
 
-  Future<void> _tap(Product p) async {
+  Product _live(Product p) => widget.store.products
+      .firstWhere((x) => x.id == p.id, orElse: () => p);
+
+  /// Adds a product to the cart, but NEVER more than what is in stock.
+  Future<ScanFeedback> _addProduct(BuildContext ctx, Product p,
+      {required bool inScanner}) async {
+    final live = _live(p);
     var qty = 1.0;
-    if (p.isWeighted) {
-      final w = await askNumber(context,
-          title: 'الكمية بالكيلوغرام — ${p.name}', hint: 'مثال: 0.5');
-      if (w == null || w <= 0) return;
+    if (live.isWeighted) {
+      final w = await askNumber(ctx,
+          title: 'الكمية بالكيلوغرام — ${live.name}', hint: 'مثال: 0.5');
+      if (w == null || w <= 0) return const ScanFeedback('أُلغيت الإضافة', false);
       qty = w;
     }
-    widget.cart.add(p, qty: qty);
+    final wanted = widget.cart.qtyOf(live.id) + qty;
+    if (wanted > live.stock + 1e-9) {
+      if (!ctx.mounted) return const ScanFeedback('لا يكفي المخزون', false);
+      final go = await showStockProblem(ctx, live, wanted);
+      if (go) {
+        if (inScanner) {
+          _goInventoryAfterScanner = live;
+          return const ScanFeedback('لا يكفي المخزون', false, close: true);
+        }
+        widget.onGoToInventory(live);
+      }
+      return const ScanFeedback('لا يكفي المخزون — لم تُضف السلعة', false);
+    }
+    widget.cart.add(live, qty: qty);
+    return ScanFeedback('أُضيفت: ${live.name}', true);
+  }
+
+  /// Looks the barcode up and adds the product (or offers to register it).
+  Future<ScanFeedback?> _handleBarcode(BuildContext ctx, String code,
+      {bool inScanner = false}) async {
+    final p = widget.store.productByBarcode(code);
+    if (p == null) {
+      final create = await confirmDialog(
+          ctx, 'الباركود $code غير مسجل في المخزون.\nهل تريد إضافة سلعة بهذا الباركود؟',
+          okText: 'إضافة سلعة');
+      if (create && ctx.mounted) {
+        await showDialog<void>(
+          context: ctx,
+          builder: (_) => ProductDialog(store: widget.store, initialBarcode: code),
+        );
+      }
+      return const ScanFeedback('باركود غير مسجل', false);
+    }
+    return _addProduct(ctx, p, inScanner: inScanner);
+  }
+
+  Future<void> _onUsbScan(String code) async {
+    if (!mounted) return;
+    // The scanner also "typed" the digits into the search box: clean it.
+    _search.clear();
+    setState(() => _query = '');
+    final fb = await _handleBarcode(context, code);
+    if (fb != null && mounted) snack(context, fb.text, error: !fb.ok);
+  }
+
+  Future<void> _submitSearch(String v) async {
+    final p = widget.store.productByBarcode(v);
+    if (p == null) return;
+    _search.clear();
+    setState(() => _query = '');
+    await _addProduct(context, p, inScanner: false);
+  }
+
+  Future<void> _openCameraScanner() async {
+    _goInventoryAfterScanner = null;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => BarcodeScannerPage(
+        title: 'مسح السلع بالكاميرا',
+        onCode: (ctx, code) => _handleBarcode(ctx, code, inScanner: true),
+        footer: ListenableBuilder(
+          listenable: widget.cart,
+          builder: (ctx, _) => Container(
+            color: Colors.black87,
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+            child: Row(children: [
+              Expanded(
+                child: Text(
+                  'السلة: ${widget.cart.count} سلعة — ${formatDA(widget.cart.total)} د.ج',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('تم'),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    ));
+    final go = _goInventoryAfterScanner;
+    _goInventoryAfterScanner = null;
+    if (go != null && mounted) widget.onGoToInventory(go);
   }
 
   @override
@@ -51,15 +206,27 @@ class _PosScreenState extends State<PosScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
-              child: TextField(
-                onChanged: (v) => setState(() => _query = v),
-                decoration: const InputDecoration(
-                  hintText: 'ابحث عن سلعة...',
-                  prefixIcon: Icon(Icons.search),
-                  filled: true,
-                  fillColor: Colors.white,
+              child: Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: _search,
+                    onChanged: (v) => setState(() => _query = v),
+                    onSubmitted: _submitSearch,
+                    decoration: const InputDecoration(
+                      hintText: 'ابحث عن سلعة أو امسح الباركود...',
+                      prefixIcon: Icon(Icons.search),
+                      filled: true,
+                      fillColor: Colors.white,
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  tooltip: 'مسح الباركود بالكاميرا',
+                  onPressed: _openCameraScanner,
+                  icon: const Icon(Icons.qr_code_scanner),
+                ),
+              ]),
             ),
             SizedBox(
               height: 44,
@@ -93,7 +260,7 @@ class _PosScreenState extends State<PosScreen> {
                       itemCount: items.length,
                       itemBuilder: (_, i) => _ProductTile(
                         product: items[i],
-                        onTap: () => _tap(items[i]),
+                        onTap: () => _addProduct(context, items[i], inScanner: false),
                       ),
                     ),
             ),
@@ -114,7 +281,10 @@ class _PosScreenState extends State<PosScreen> {
                           isScrollControlled: true,
                           useSafeArea: true,
                           builder: (_) => CheckoutSheet(
-                              store: widget.store, cart: widget.cart),
+                            store: widget.store,
+                            cart: widget.cart,
+                            onGoToInventory: widget.onGoToInventory,
+                          ),
                         ),
                         icon: const Icon(Icons.shopping_cart_checkout),
                         label: Text(
@@ -185,7 +355,13 @@ class _ProductTile extends StatelessWidget {
 class CheckoutSheet extends StatefulWidget {
   final Store store;
   final Cart cart;
-  const CheckoutSheet({super.key, required this.store, required this.cart});
+  final void Function(Product) onGoToInventory;
+  const CheckoutSheet({
+    super.key,
+    required this.store,
+    required this.cart,
+    required this.onGoToInventory,
+  });
 
   @override
   State<CheckoutSheet> createState() => _CheckoutSheetState();
@@ -218,7 +394,40 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
     return total - paid;
   }
 
+  Product _live(Product p) => widget.store.products
+      .firstWhere((x) => x.id == p.id, orElse: () => p);
+
+  /// Increases a quantity only if the stock allows it; otherwise explains and
+  /// offers to go to the inventory page.
+  Future<void> _changeQty(CartLine l, double newQty) async {
+    if (newQty > l.qty) {
+      final live = _live(l.product);
+      if (newQty > live.stock + 1e-9) {
+        final go = await showStockProblem(context, live, newQty);
+        if (go && mounted) {
+          Navigator.pop(context);
+          widget.onGoToInventory(live);
+        }
+        return;
+      }
+    }
+    widget.cart.setQty(l, newQty);
+  }
+
   Future<void> _confirm() async {
+    // Last safety check: stock may have changed since the item was added.
+    for (final l in widget.cart.lines) {
+      final live = _live(l.product);
+      if (l.qty > live.stock + 1e-9) {
+        final go = await showStockProblem(context, live, l.qty);
+        if (go && mounted) {
+          Navigator.pop(context);
+          widget.onGoToInventory(live);
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
     setState(() => _busy = true);
     Sale? sale;
     final ok = await guard(context, () async {
@@ -411,7 +620,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
           onTap: () async {
             final v = await askNumber(context,
                 title: 'الكمية (${l.product.unit})', initial: l.qty);
-            if (v != null) widget.cart.setQty(l, v);
+            if (v != null) await _changeQty(l, v);
           },
           child: Container(
             constraints: const BoxConstraints(minWidth: 40),
@@ -422,7 +631,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
         ),
         IconButton(
             visualDensity: VisualDensity.compact,
-            onPressed: () => widget.cart.setQty(l, l.qty + step),
+            onPressed: () => _changeQty(l, l.qty + step),
             icon: const Icon(Icons.add_circle_outline)),
         SizedBox(
           width: 70,

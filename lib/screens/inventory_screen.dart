@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../barcode.dart';
 import '../models.dart';
 import '../store.dart';
 import '../ui.dart';
@@ -14,6 +15,30 @@ class InventoryScreen extends StatefulWidget {
 class _InventoryScreenState extends State<InventoryScreen> {
   String _query = '';
   bool _onlyLow = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.store.restockRequest.addListener(_onRestockRequest);
+  }
+
+  @override
+  void dispose() {
+    widget.store.restockRequest.removeListener(_onRestockRequest);
+    super.dispose();
+  }
+
+  /// The POS refused to sell a product with no stock and sent us here.
+  void _onRestockRequest() {
+    final p = widget.store.restockRequest.value;
+    if (p == null) return;
+    widget.store.restockRequest.value = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      snack(context, 'حدّث مخزون "${p.name}" ثم ارجع للبيع');
+      _restock(p);
+    });
+  }
 
   Future<void> _edit([Product? p]) async {
     await showDialog<void>(
@@ -45,7 +70,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final items = widget.store.products.where((p) {
             if (_onlyLow && !p.isLow) return false;
             return q.isEmpty ||
-                normalizeArabic('${p.name} ${p.brand} ${p.category}').contains(q);
+                normalizeArabic('${p.name} ${p.brand} ${p.category}').contains(q) ||
+                p.barcode.contains(_query.trim());
           }).toList();
           final stockValue = widget.store.products
               .fold(0.0, (a, p) => a + p.stock * p.costPrice);
@@ -105,7 +131,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             title: Text(p.name,
                                 style: const TextStyle(fontWeight: FontWeight.bold)),
                             subtitle: Text(
-                                '${p.category} • شراء ${formatDA(p.costPrice)} • بيع ${formatDA(p.sellingPrice)} د.ج'),
+                                '${p.category} • شراء ${formatDA(p.costPrice)} • بيع ${formatDA(p.sellingPrice)} د.ج'
+                                '${p.barcode.isEmpty ? '' : '\nباركود: ${p.barcode}'}'),
                             leading: CircleAvatar(
                               backgroundColor: color.withAlpha(30),
                               child: Text(fmtQty(p.stock),
@@ -134,7 +161,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
 class ProductDialog extends StatefulWidget {
   final Store store;
   final Product? product;
-  const ProductDialog({super.key, required this.store, this.product});
+
+  /// Pre-fills the barcode (used when a scanned code is not registered yet).
+  final String? initialBarcode;
+  const ProductDialog(
+      {super.key, required this.store, this.product, this.initialBarcode});
 
   @override
   State<ProductDialog> createState() => _ProductDialogState();
@@ -143,6 +174,8 @@ class ProductDialog extends StatefulWidget {
 class _ProductDialogState extends State<ProductDialog> {
   late final _name = TextEditingController(text: widget.product?.name ?? '');
   late final _brand = TextEditingController(text: widget.product?.brand ?? '');
+  late final _barcode = TextEditingController(
+      text: widget.product?.barcode ?? widget.initialBarcode ?? '');
   late final _cost = TextEditingController(
       text: widget.product == null ? '' : fmtQty(widget.product!.costPrice));
   late final _price = TextEditingController(
@@ -158,7 +191,7 @@ class _ProductDialogState extends State<ProductDialog> {
 
   @override
   void dispose() {
-    for (final c in [_name, _brand, _cost, _price, _stock, _min]) {
+    for (final c in [_name, _brand, _barcode, _cost, _price, _stock, _min]) {
       c.dispose();
     }
     super.dispose();
@@ -178,6 +211,7 @@ class _ProductDialogState extends State<ProductDialog> {
     final p = Product(
       name: _name.text.trim(),
       brand: _brand.text.trim(),
+      barcode: _barcode.text.trim(),
       category: _category,
       unit: _unit,
       isWeighted: _unit == 'كغ',
@@ -219,6 +253,29 @@ class _ProductDialogState extends State<ProductDialog> {
           TextField(
               controller: _brand,
               decoration: const InputDecoration(labelText: 'العلامة (اختياري)')),
+          gap,
+          TextField(
+            controller: _barcode,
+            textDirection: TextDirection.ltr,
+            textAlign: TextAlign.right,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(
+              labelText: 'الباركود (اختياري)',
+              helperText: 'امسحه بجهاز USB أو بالكاميرا أو اكتبه',
+              suffixIcon: IconButton(
+                tooltip: 'مسح بالكاميرا',
+                icon: const Icon(Icons.qr_code_scanner),
+                onPressed: () async {
+                  final code = await Navigator.of(context).push<String>(
+                    MaterialPageRoute(
+                      builder: (_) => const BarcodeScannerPage(title: 'امسح باركود السلعة'),
+                    ),
+                  );
+                  if (code != null) setState(() => _barcode.text = code);
+                },
+              ),
+            ),
+          ),
           gap,
           DropdownButtonFormField<String>(
             value: _category,
