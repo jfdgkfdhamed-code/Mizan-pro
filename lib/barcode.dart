@@ -103,6 +103,17 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     super.dispose();
   }
 
+  /// Restarts the camera (useful right after the permission was just granted).
+  Future<void> _retry() async {
+    try {
+      await _controller.stop();
+    } catch (_) {}
+    try {
+      await _controller.start();
+    } catch (_) {}
+    if (mounted) setState(() {});
+  }
+
   Future<void> _onDetect(BarcodeCapture capture) async {
     if (_busy) return;
     String? code;
@@ -165,13 +176,44 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
           MobileScanner(
             controller: _controller,
             onDetect: _onDetect,
-            errorBuilder: (context, error, child) => const Center(
+            errorBuilder: (context, error, child) => Align(
+              alignment: const Alignment(0, -0.75),
               child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'تعذر تشغيل الكاميرا.\nتأكد من السماح للتطبيق باستعمال الكاميرا من إعدادات الهاتف.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white, height: 1.6),
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'تعذر تشغيل الكاميرا',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16),
+                    ),
+                    const SizedBox(height: 8),
+                    // The real reason, so it can be diagnosed.
+                    Text(
+                      'رمز الخطأ: ${error.errorCode.name}'
+                      '${(error.errorDetails?.message ?? '').isEmpty ? '' : '\n${error.errorDetails!.message}'}',
+                      textAlign: TextAlign.center,
+                      textDirection: TextDirection.ltr,
+                      style: const TextStyle(
+                          color: Colors.amberAccent, fontSize: 12, height: 1.5),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'إذا منحت الإذن للتو فاضغط «إعادة المحاولة».\n'
+                      'وإلا افتح إعدادات الهاتف ← التطبيقات ← الميزان برو ← الأذونات ← الكاميرا.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70, height: 1.6, fontSize: 12.5),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: _retry,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('إعادة المحاولة'),
+                    ),
+                  ],
                 ),
               ),
             ),
